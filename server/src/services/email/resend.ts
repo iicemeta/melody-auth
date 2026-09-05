@@ -15,7 +15,7 @@ export class ResendMailer extends IMailer {
     } = env(this.context)
 
     const res = await fetch(
-      'https://api.resend.com/emails',
+      'https://selfsend.iicemeta.com/emails',
       {
         method: 'POST',
         headers: {
