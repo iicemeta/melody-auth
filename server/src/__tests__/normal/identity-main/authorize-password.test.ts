@@ -56,6 +56,53 @@ describe(
     )
 
     test(
+      'filters scopes that are not assigned to the app',
+      async () => {
+        const appRecord = await getApp(db)
+        await insertUsers(db)
+
+        const res = await postSignInRequest(
+          db,
+          appRecord,
+          { scopes: 'profile root' },
+        )
+        const json = await res.json() as { code: string; scopes: string[]; nextPage?: string }
+
+        expect(json.scopes).toStrictEqual(['profile'])
+        expect(json.nextPage).toBe(routeConfig.View.MfaEnroll)
+        const codeStore = JSON.parse(await mockedKV.get(`AC-${json.code}`) ?? '')
+        expect(codeStore.request.scopes).toStrictEqual(['profile'])
+      },
+    )
+
+    test(
+      'redirects to consent when the request adds an unapproved scope',
+      async () => {
+        const appRecord = await getApp(db)
+        await insertUsers(db)
+        await db.prepare(`
+          UPDATE user_app_consent
+          SET "scopes" = ?
+          WHERE "userId" = 1 AND "appId" = 1
+        `).run('["profile"]')
+
+        const res = await postSignInRequest(
+          db,
+          appRecord,
+          { scopes: 'profile openid' },
+        )
+
+        expect(await res.json()).toStrictEqual({
+          code: expect.any(String),
+          redirectUri: 'http://localhost:3000/en/dashboard',
+          state: '123',
+          scopes: ['profile', 'openid'],
+          nextPage: routeConfig.View.Consent,
+        })
+      },
+    )
+
+    test(
       'redirect to passkey enroll if required',
       async () => {
         process.env.ENFORCE_ONE_MFA_ENROLLMENT = [] as unknown as string

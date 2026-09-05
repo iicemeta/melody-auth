@@ -82,6 +82,21 @@ export const getAuthCodeBody = async (
   return codeBody
 }
 
+export const getAuthCodeBodyForPolicy = async (
+  kv: KVNamespace,
+  authCode: string,
+  policy: string,
+): Promise<typeConfig.AuthCodeBody | false> => {
+  const authCodeBody = await getAuthCodeBody(
+    kv,
+    authCode,
+  )
+
+  if (!authCodeBody || authCodeBody.request.policy !== policy) return false
+
+  return authCodeBody
+}
+
 export const deleteAuthCode = async (
   kv: KVNamespace,
   authCode: string,
@@ -119,6 +134,16 @@ export const storeEmbeddedSession = async (
     JSON.stringify(embeddedSessionBody),
     { expirationTtl: expiresIn },
   )
+}
+
+export const deleteEmbeddedSession = async (
+  kv: KVNamespace,
+  sessionId: string,
+) => {
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.EmbeddedSession,
+    sessionId,
+  ))
 }
 
 export const storeRefreshToken = async (
@@ -186,6 +211,17 @@ const hashSessionId = async (kvKeyName: string): Promise<string> => {
       '0',
     ))
     .join('')
+}
+
+const getOtpMfaUsedStepKey = (
+  userId: number,
+  timeStep: number,
+) => {
+  return adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.OtpMfaUsedStep,
+    String(userId),
+    String(timeStep),
+  )
 }
 
 export const listActiveSessionsByUser = async (
@@ -358,14 +394,30 @@ export const stampOtpMfaCode = async (
   authCode: string,
   mfaCode: string,
   otpSecret: string,
+  userId: number,
   expiresIn: number,
 ) => {
-  const otp = await cryptoUtil.genTotp(otpSecret)
-  if (otp !== mfaCode) return false
+  const timeStep = await cryptoUtil.verifyTotp(
+    otpSecret,
+    mfaCode,
+  )
+  if (timeStep === null) return false
+
+  const usedStepKey = getOtpMfaUsedStepKey(
+    userId,
+    timeStep,
+  )
+  const usedStep = await kv.get(usedStepKey)
+  if (usedStep) return false
 
   const key = adapterConfig.getKVKey(
     adapterConfig.BaseKVKey.OtpMfaCode,
     authCode,
+  )
+  await kv.put(
+    usedStepKey,
+    '1',
+    { expirationTtl: cryptoUtil.totpReplayWindowSeconds },
   )
   await kv.put(
     key,
@@ -821,7 +873,7 @@ export const setPasskeyVerifyChallenge = async (
   )
 }
 
-export const getPasskeyVerifyChallenge = async (
+export const verifyPasskeyVerifyChallenge = async (
   kv: KVNamespace,
   challenge: string,
 ) => {
@@ -829,7 +881,10 @@ export const getPasskeyVerifyChallenge = async (
     adapterConfig.BaseKVKey.PasskeyVerifyChallenge,
     challenge,
   )
-  return await kv.get(key)
+  const stored = await kv.get(key)
+  const isValid = stored && stored === '1'
+  if (isValid) await kv.delete(key)
+  return isValid
 }
 
 export const storeOidcCodeVerifier = async (
@@ -858,6 +913,32 @@ export const verifyOidcCodeVerifier = async (
   const isValid = storedCode && storedCode === '1'
   if (isValid) await kv.delete(key)
   return isValid
+}
+
+export const isSamlResponseConsumed = async (
+  kv: KVNamespace,
+  responseId: string,
+): Promise<boolean> => {
+  const stored = await kv.get(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.SamlResponseId,
+    responseId,
+  ))
+  return stored === '1'
+}
+
+export const markSamlResponseConsumed = async (
+  kv: KVNamespace,
+  responseId: string,
+  expiresIn: number,
+) => {
+  await kv.put(
+    adapterConfig.getKVKey(
+      adapterConfig.BaseKVKey.SamlResponseId,
+      responseId,
+    ),
+    '1',
+    { expirationTtl: expiresIn },
+  )
 }
 
 export const storeChangeEmailCode = async (
@@ -944,6 +1025,38 @@ export const setFailedChangeEmailCodeAttempts = async (
 ) => {
   const key = adapterConfig.getKVKey(
     adapterConfig.BaseKVKey.FailedChangeEmailCodeAttempts,
+    String(userId),
+    ip,
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: 1800 },
+  )
+}
+
+export const getFailedEmailVerificationCodeAttemptsByIP = async (
+  kv: KVNamespace,
+  userId: number,
+  ip?: string,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.FailedEmailVerificationCodeAttempts,
+    String(userId),
+    ip,
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setFailedEmailVerificationCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+  ip: string | undefined,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.FailedEmailVerificationCodeAttempts,
     String(userId),
     ip,
   )

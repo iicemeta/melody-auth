@@ -215,6 +215,10 @@ Melody Auth offers a range of customizable options to tailor the authentication 
 - **Default:** 5
 - **Description:** Number of failed change-email code verification attempts before further attempts are temporarily locked for the user/IP. 0 means no limit.
 
+### EMAIL_VERIFICATION_CODE_THRESHOLD
+- **Default:** 5
+- **Description:** Number of failed email verification code attempts before further attempts are temporarily locked for the user/IP for 30 minutes. 0 means no limit.
+
 ### SMS_MFA_MESSAGE_THRESHOLD
 - **Default:** 5
 - **Description:** Maximum SMS MFA requests per account/IP in a 30-minute window. 0 means no limit.
@@ -225,7 +229,7 @@ Melody Auth offers a range of customizable options to tailor the authentication 
 
 ### MFA_CODE_VERIFY_THRESHOLD
 - **Default:** 10
-- **Description:** Number of failed MFA code verification attempts (email, SMS and OTP combined) per user/IP before further attempts are temporarily locked for 30 minutes. 0 means no limit.
+- **Description:** Number of failed MFA code verification attempts (email, SMS, OTP and passwordless combined) per user/IP before further attempts are temporarily locked for 30 minutes. 0 means no limit.
 
 ### AUTH_CODE_VERIFIER_THRESHOLD
 - **Default:** unset (commented out)

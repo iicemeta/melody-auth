@@ -11,7 +11,7 @@ import {
   messageConfig, routeConfig,
 } from 'configs'
 import {
-  prepareFollowUpBody, insertUsers, postSignInRequest, getApp,
+  prepareFollowUpBody, insertUsers, postSignInRequest, getApp, markAuthCodeAsSecured,
 } from 'tests/identity'
 import {
   enrollEmailMfa, enrollOtpMfa, enrollSmsMfa,
@@ -29,8 +29,17 @@ afterEach(async () => {
   await mockedKV.empty()
 })
 
-const sendCorrectResetMfaReq = async ({ code }: { code?: string } = {}) => {
-  const body = await prepareFollowUpBody(db)
+const sendCorrectResetMfaReq = async ({
+  code, policy = Policy.ResetMfa,
+}: {
+  code?: string;
+  policy?: Policy;
+} = {}) => {
+  const body = await prepareFollowUpBody(
+    db,
+    policy,
+  )
+  await markAuthCodeAsSecured(body.code)
 
   const res = await app.request(
     routeConfig.IdentityRoute.ResetMfa,
@@ -160,6 +169,19 @@ describe(
           false,
         )
         const { res } = await sendCorrectResetMfaReq({ code: 'abc' })
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
+      },
+    )
+
+    test(
+      'should throw error if auth code has the wrong policy',
+      async () => {
+        await insertUsers(
+          db,
+          false,
+        )
+        const { res } = await sendCorrectResetMfaReq({ policy: Policy.SignInOrSignUp })
         expect(res.status).toBe(400)
         expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
       },

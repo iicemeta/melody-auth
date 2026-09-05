@@ -442,10 +442,12 @@ export const impersonateUser = async (c: Context<typeConfig.Context>) => {
     throw new errorConfig.UnAuthorized(messageConfig.RequestError.impersonatorIsNotSuperAdmin)
   }
 
+  const impersonationScopes = [Scope.OfflineAccess, Scope.Profile]
   const requireConsent = await consentService.shouldCollectConsent(
     c,
     user.id,
     app.id,
+    impersonationScopes,
   )
 
   if (requireConsent) {
@@ -462,7 +464,7 @@ export const impersonateUser = async (c: Context<typeConfig.Context>) => {
     user.id,
   )
 
-  const scope = `${Scope.OfflineAccess} ${Scope.Profile}`
+  const scope = impersonationScopes.join(' ')
   const currentTimestamp = timeUtil.getCurrentTimestamp()
   const refreshTokenExpiresIn = 1800
   const refreshToken = `${user.id}.${genRandomString(128)}`
@@ -744,6 +746,11 @@ export const postUserInvitation = async (c: Context<typeConfig.Context>) => {
   const locale = (bodyDto.locale ?? supportedLocales[0]) as typeConfig.Locale
   const orgSlug = bodyDto.orgSlug?.trim() ?? ''
   const requestedRoles = Array.from(new Set(bodyDto.roles ?? []))
+
+  userService.verifyCanAssignRoles(
+    c,
+    requestedRoles,
+  )
 
   const existingUser = await userModel.getNormalUserByEmail(
     c.env.DB,

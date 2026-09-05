@@ -38,6 +38,7 @@ export enum BaseKVKey {
   OtpMfaRememberDevice = 'OMRD',
   SmsMfaRememberDevice = 'SMRD',
   OtpMfaCode = 'OMC',
+  OtpMfaUsedStep = 'OMUS',
   SmsMfaCode = 'SMC',
   PasswordlessCode = 'PLC',
   EmailVerificationCode = 'EVC',
@@ -48,6 +49,7 @@ export enum BaseKVKey {
   FailedMfaCodeAttempts = 'FMA',
   FailedPasswordResetCodeAttempts = 'FPRCA',
   FailedChangeEmailCodeAttempts = 'FCECA',
+  FailedEmailVerificationCodeAttempts = 'FEVCA',
   FailedAuthCodeVerifierAttempts = 'FACVA',
   SmsMfaMessageAttempts = 'SMMA',
   EmailMfaEmailAttempts = 'EMEA',
@@ -55,6 +57,7 @@ export enum BaseKVKey {
   ChangeEmailCode = 'CEC',
   ChangeEmailAttempts = 'CEA',
   OidcCodeVerifier = 'OVC',
+  SamlResponseId = 'SAMLR',
 }
 
 export const getKVKey = (

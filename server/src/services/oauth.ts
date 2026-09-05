@@ -10,22 +10,23 @@ import {
   cryptoUtil, loggerUtil, requestUtil, timeUtil,
 } from 'utils'
 import {
-  consentService,
+  identityService,
   jwtService,
   kvService,
-  mfaService,
   roleService,
+  scopeService,
   userService,
 } from 'services'
 import { oauthDto } from 'dtos'
 import {
-  signInLogModel, userAttributeModel, userAttributeValueModel, userModel,
+  signInLogModel, userAttributeModel, userAttributeValueModel,
 } from 'models'
 
 export const handleAuthCodeTokenExchange = async (
   c: Context<typeConfig.Context>,
   authInfo: typeConfig.AuthCodeBody,
   bodyDto: oauthDto.PostTokenAuthCodeDto,
+  options: { persistAuthCode?: boolean } = {},
 ) => {
   const { AUTH_CODE_VERIFIER_THRESHOLD: threshold } = env(c)
 
@@ -70,109 +71,29 @@ export const handleAuthCodeTokenExchange = async (
     throw new errorConfig.Forbidden(messageConfig.RequestError.WrongCodeVerifier)
   }
 
-  const isSocialLogin = !!authInfo.user.socialAccountId
-
   const {
     ENABLE_SIGN_IN_LOG: enableSignInLog,
-    ENABLE_PASSWORDLESS_SIGN_IN: enablePasswordlessSignIn,
     ENABLE_USER_ATTRIBUTE: enableUserAttribute,
   } = env(c)
 
-  const {
-    requireEmailMfa,
-    requireOtpMfa,
-    requireSmsMfa,
-    enforceOneMfaEnrollment: enforceMfa,
-  } = mfaService.getAuthorizeMfaConfig(
+  await identityService.ensureAuthCodeIsSecured(
     c,
+    bodyDto.code,
     authInfo,
+    options,
   )
 
-  if (!isSocialLogin && !authInfo.isFullyAuthorized) {
-    if (enforceMfa?.length && !requireEmailMfa && !requireOtpMfa && !requireSmsMfa) {
-      if (!authInfo.user.mfaTypes.length) {
-        loggerUtil.triggerLogger(
-          c,
-          loggerUtil.LoggerLevel.Warn,
-          messageConfig.RequestError.MfaNotVerified,
-        )
-        throw new errorConfig.UnAuthorized(messageConfig.RequestError.MfaNotVerified)
-      }
-    }
-
-    if (requireOtpMfa || authInfo.user.mfaTypes.includes(userModel.MfaType.Otp)) {
-      const isVerified = await kvService.optMfaCodeVerified(
-        c.env.KV,
-        bodyDto.code,
-      )
-      if (!isVerified) {
-        loggerUtil.triggerLogger(
-          c,
-          loggerUtil.LoggerLevel.Warn,
-          messageConfig.RequestError.MfaNotVerified,
-        )
-        throw new errorConfig.UnAuthorized(messageConfig.RequestError.MfaNotVerified)
-      }
-    }
-
-    if (requireSmsMfa || authInfo.user.mfaTypes.includes(userModel.MfaType.Sms)) {
-      const isVerified = await kvService.smsMfaCodeVerified(
-        c.env.KV,
-        bodyDto.code,
-      )
-      if (!isVerified) {
-        loggerUtil.triggerLogger(
-          c,
-          loggerUtil.LoggerLevel.Warn,
-          messageConfig.RequestError.MfaNotVerified,
-        )
-        throw new errorConfig.UnAuthorized(messageConfig.RequestError.MfaNotVerified)
-      }
-    }
-
-    if (requireEmailMfa || authInfo.user.mfaTypes.includes(userModel.MfaType.Email)) {
-      const isVerified = await kvService.emailMfaCodeVerified(
-        c.env.KV,
-        bodyDto.code,
-      )
-      if (!isVerified) {
-        loggerUtil.triggerLogger(
-          c,
-          loggerUtil.LoggerLevel.Warn,
-          messageConfig.RequestError.MfaNotVerified,
-        )
-        throw new errorConfig.UnAuthorized(messageConfig.RequestError.MfaNotVerified)
-      }
-    }
-
-    if (enablePasswordlessSignIn) {
-      const isVerified = await kvService.passwordlessCodeVerified(
-        c.env.KV,
-        bodyDto.code,
-      )
-      if (!isVerified) {
-        loggerUtil.triggerLogger(
-          c,
-          loggerUtil.LoggerLevel.Warn,
-          messageConfig.RequestError.PasswordlessNotVerified,
-        )
-        throw new errorConfig.UnAuthorized(messageConfig.RequestError.PasswordlessNotVerified)
-      }
-    }
-  }
-
-  const requireConsent = await consentService.shouldCollectConsent(
+  const authorizedScopes = await scopeService.verifyAppScopes(
     c,
-    authInfo.user.id,
     authInfo.appId,
+    authInfo.request.scopes,
   )
-  if (requireConsent) {
-    loggerUtil.triggerLogger(
-      c,
-      loggerUtil.LoggerLevel.Warn,
-      messageConfig.RequestError.NoConsent,
-    )
-    throw new errorConfig.UnAuthorized(messageConfig.RequestError.NoConsent)
+  const scopedAuthInfo = {
+    ...authInfo,
+    request: {
+      ...authInfo.request,
+      scopes: authorizedScopes,
+    },
   }
 
   const userRoles = await roleService.getUserRoles(
@@ -180,7 +101,7 @@ export const handleAuthCodeTokenExchange = async (
     authInfo.user.id,
   )
   const authId = authInfo.user.authId
-  const scope = authInfo.request.scopes.join(' ')
+  const scope = authorizedScopes.join(' ')
   const currentTimestamp = timeUtil.getCurrentTimestamp()
 
   const {
@@ -203,10 +124,10 @@ export const handleAuthCodeTokenExchange = async (
     expires_on: accessTokenExpiresAt,
     not_before: currentTimestamp,
     token_type: 'Bearer',
-    scope: authInfo.request.scopes.join(' '),
+    scope,
   }
 
-  if (authInfo.request.scopes.includes(Scope.OfflineAccess)) {
+  if (authorizedScopes.includes(Scope.OfflineAccess)) {
     const { SPA_REFRESH_TOKEN_EXPIRES_IN: refreshTokenExpiresIn } = env(c)
     const refreshToken = `${authInfo.user.id}.${genRandomString(128)}`
     const refreshTokenExpiresAt = currentTimestamp + refreshTokenExpiresIn
@@ -229,7 +150,7 @@ export const handleAuthCodeTokenExchange = async (
     )
   }
 
-  if (authInfo.request.scopes.includes(Scope.OpenId)) {
+  if (authorizedScopes.includes(Scope.OpenId)) {
     let attributes: Record<string, string> | undefined
     if (enableUserAttribute) {
       attributes = {}
@@ -249,7 +170,7 @@ export const handleAuthCodeTokenExchange = async (
     const { idToken } = await jwtService.genIdToken(
       c,
       currentTimestamp,
-      authInfo,
+      scopedAuthInfo,
       userRoles,
       attributes,
     )

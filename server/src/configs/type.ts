@@ -55,6 +55,7 @@ export type Bindings = {
   ENABLE_USER_APP_CONSENT: boolean;
   ENABLE_EMAIL_VERIFICATION: boolean;
   REPLACE_EMAIL_VERIFICATION_WITH_WELCOME_EMAIL: boolean;
+  EMAIL_VERIFICATION_CODE_THRESHOLD: number;
   EMAIL_MFA_IS_REQUIRED: boolean;
   EMAIL_MFA_EMAIL_THRESHOLD: number;
   CHANGE_EMAIL_EMAIL_THRESHOLD: number;
@@ -126,6 +127,7 @@ export interface AuthCodeBody {
   appId: number;
   appName: string;
   isFullyAuthorized?: boolean;
+  isSecured?: boolean;
   mfa?: AuthCodeBodyMfaConfig;
 }
 
@@ -135,7 +137,9 @@ export interface EmbeddedSessionBody {
   appName: string;
   user?: userModel.Record;
   isFullyAuthorized?: boolean;
+  isSecured?: boolean;
   mfa?: AuthCodeBodyMfaConfig;
+  samlRequestId?: string;
 }
 
 export interface EmbeddedSessionBodyWithUser {
@@ -143,7 +147,10 @@ export interface EmbeddedSessionBodyWithUser {
   appId: number;
   appName: string;
   user: userModel.Record;
+  isFullyAuthorized?: boolean;
+  isSecured?: boolean;
   mfa?: AuthCodeBodyMfaConfig;
+  samlRequestId?: string;
 }
 
 export interface AccessTokenBody {

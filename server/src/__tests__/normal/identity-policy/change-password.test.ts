@@ -11,7 +11,7 @@ import {
   messageConfig, routeConfig,
 } from 'configs'
 import {
-  prepareFollowUpBody, insertUsers, postSignInRequest, getApp,
+  prepareFollowUpBody, insertUsers, postSignInRequest, getApp, markAuthCodeAsSecured,
 } from 'tests/identity'
 import { Policy } from 'dtos/oauth'
 
@@ -26,15 +26,22 @@ afterEach(async () => {
   await mockedKV.empty()
 })
 
-const sendCorrectChangePasswordReq = async ({ code }: {
+const sendCorrectChangePasswordReq = async ({
+  code, policy = Policy.ChangePassword,
+}: {
   code?: string;
+  policy?: Policy;
 } = {}) => {
   await insertUsers(
     db,
     false,
   )
 
-  const body = await prepareFollowUpBody(db)
+  const body = await prepareFollowUpBody(
+    db,
+    policy,
+  )
+  await markAuthCodeAsSecured(body.code)
   const res = await app.request(
     routeConfig.IdentityRoute.ChangePassword,
     {
@@ -85,7 +92,11 @@ describe(
           false,
         )
 
-        const body = await prepareFollowUpBody(db)
+        const body = await prepareFollowUpBody(
+          db,
+          Policy.ChangePassword,
+        )
+        await markAuthCodeAsSecured(body.code)
         const res = await app.request(
           routeConfig.IdentityRoute.ChangePassword,
           {
@@ -111,7 +122,10 @@ describe(
           false,
         )
 
-        const body = await prepareFollowUpBody(db)
+        const body = await prepareFollowUpBody(
+          db,
+          Policy.ChangePassword,
+        )
 
         const authStore = await mockedKV.get(`AC-${body.code}`)
         await mockedKV.put(
@@ -124,6 +138,7 @@ describe(
             },
           }),
         )
+        await markAuthCodeAsSecured(body.code)
 
         const res = await app.request(
           routeConfig.IdentityRoute.ChangePassword,
@@ -146,6 +161,15 @@ describe(
       'should throw 400 if use wrong auth code',
       async () => {
         const { res } = await sendCorrectChangePasswordReq({ code: 'abc' })
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
+      },
+    )
+
+    test(
+      'should throw 400 if auth code has the wrong policy',
+      async () => {
+        const { res } = await sendCorrectChangePasswordReq({ policy: Policy.SignInOrSignUp })
         expect(res.status).toBe(400)
         expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
       },

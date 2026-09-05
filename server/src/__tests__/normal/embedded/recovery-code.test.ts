@@ -12,7 +12,7 @@ import {
   messageConfig, routeConfig,
 } from 'configs'
 import {
-  getApp, insertUsers,
+  getApp, insertUsers, markEmbeddedSessionAsSecured,
 } from 'tests/identity'
 
 let db: Database
@@ -61,6 +61,8 @@ const sendSignInRequest = async (
     },
     mock(db),
   )
+
+  await markEmbeddedSessionAsSecured(sessionId)
 
   const recoveryCodeEnrollRes = await app.request(
     routeConfig.EmbeddedRoute.RecoveryCodeEnroll.replace(
@@ -114,6 +116,7 @@ describe(
         expect(json).toStrictEqual({
           sessionId,
           success: true,
+          recoveryCode: expect.any(String),
         })
 
         process.env.EMBEDDED_AUTH_ORIGINS = [] as unknown as string
@@ -172,6 +175,8 @@ describe(
         )
 
         process.env.ENABLE_RECOVERY_CODE = true as unknown as string
+
+        await markEmbeddedSessionAsSecured(sessionId)
 
         const recoveryCodeEnrollRes = await app.request(
           routeConfig.EmbeddedRoute.RecoveryCodeEnroll.replace(

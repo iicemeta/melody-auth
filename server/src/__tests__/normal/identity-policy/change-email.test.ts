@@ -17,6 +17,7 @@ import {
 import {
   prepareFollowUpBody, postAuthorizeBody,
   insertUsers, postSignInRequest, getApp,
+  markAuthCodeAsSecured,
 } from 'tests/identity'
 import {
   jwtService, kvService,
@@ -35,12 +36,21 @@ afterEach(async () => {
   await mockedKV.empty()
 })
 
-const sendCorrectChangeEmailCodeReq = async ({ code }: { code?: string } = {}) => {
+const sendCorrectChangeEmailCodeReq = async ({
+  code, policy = Policy.ChangeEmail,
+}: {
+  code?: string;
+  policy?: Policy;
+} = {}) => {
   await insertUsers(
     db,
     false,
   )
-  const body = await prepareFollowUpBody(db)
+  const body = await prepareFollowUpBody(
+    db,
+    policy,
+  )
+  await markAuthCodeAsSecured(body.code)
   const correctBody = {
     ...body,
     email: 'test_new@email.com',
@@ -188,7 +198,10 @@ describe(
           db,
           false,
         )
-        const body = await prepareFollowUpBody(db)
+        const body = await prepareFollowUpBody(
+          db,
+          Policy.ChangeEmail,
+        )
         const res = await app.request(
           routeConfig.IdentityRoute.ChangeEmailCode,
           {
@@ -201,6 +214,16 @@ describe(
           },
           mock(db),
         )
+
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
+      },
+    )
+
+    test(
+      'should throw error if auth code has the wrong policy',
+      async () => {
+        const { res } = await sendCorrectChangeEmailCodeReq({ policy: Policy.SignInOrSignUp })
 
         expect(res.status).toBe(400)
         expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
@@ -258,6 +281,7 @@ describe(
             body: JSON.stringify({
               ...(await postAuthorizeBody(appRecord)),
               credential,
+              policy: Policy.ChangeEmail,
             }),
           },
           mock(db),
@@ -320,7 +344,11 @@ describe(
           db,
           false,
         )
-        const body = await prepareFollowUpBody(db)
+        const body = await prepareFollowUpBody(
+          db,
+          Policy.ChangeEmail,
+        )
+        await markAuthCodeAsSecured(body.code)
         const correctBody = {
           ...body,
           email: 'test@email.com',
@@ -364,6 +392,29 @@ describe(
       async () => {
         await sendCorrectChangeEmailCodeReq()
         const { res } = await sendCorrectChangeEmailReq({ code: 'abc' })
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
+      },
+    )
+
+    test(
+      'should throw 400 if auth code has the wrong policy',
+      async () => {
+        await insertUsers(
+          db,
+          false,
+        )
+        const body = await prepareFollowUpBody(
+          db,
+          Policy.SignInOrSignUp,
+        )
+        await markAuthCodeAsSecured(body.code)
+
+        const { res } = await sendCorrectChangeEmailReq({
+          code: body.code,
+          verificationCode: '123456',
+        })
+
         expect(res.status).toBe(400)
         expect(await res.text()).toBe(messageConfig.RequestError.WrongAuthCode)
       },

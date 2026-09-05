@@ -9,9 +9,7 @@ import {
   errorConfig,
   messageConfig,
 } from 'configs'
-import {
-  identityDto, oauthDto,
-} from 'dtos'
+import { identityDto } from 'dtos'
 import {
   appService, consentService, emailService,
   identityService, kvService, mfaService, sessionService, userAttributeService, userService,
@@ -79,8 +77,16 @@ export const postAuthorizeRecoveryCode = async (c: Context<typeConfig.Context>) 
     bodyDto.redirectUri,
   )
 
-  const user = await userService.verifyRecoveryCodeSignIn(
+  const {
+    user, recoveryCode,
+  } = await userService.verifyRecoveryCodeSignIn(
     c,
+    bodyDto,
+  )
+
+  const request = await identityService.getAppAuthorizedRequest(
+    c,
+    app.id,
     bodyDto,
   )
 
@@ -88,7 +94,7 @@ export const postAuthorizeRecoveryCode = async (c: Context<typeConfig.Context>) 
     appId: app.id,
     appName: app.name,
     user,
-    request: bodyDto,
+    request,
     isFullyAuthorized: true,
   }
 
@@ -109,7 +115,9 @@ export const postAuthorizeRecoveryCode = async (c: Context<typeConfig.Context>) 
     authCodeBody,
   )
 
-  return c.json(result)
+  return c.json({
+    ...result, recoveryCode,
+  })
 }
 
 export interface GetAuthorizeAccountRes {
@@ -186,7 +194,11 @@ export const postAuthorizeAccount = async (c: Context<typeConfig.Context>) => {
   const { AUTHORIZATION_CODE_EXPIRES_IN: codeExpiresIn } = env(c)
   const mfaConfig = mfaService.getAppMfaConfig(app)
 
-  const request = new oauthDto.GetAuthorizeDto(bodyDto)
+  const request = await identityService.getAppAuthorizedRequest(
+    c,
+    app.id,
+    bodyDto,
+  )
   const authCode = genRandomString(128)
   const authCodeBody = {
     appId: app.id,
@@ -266,6 +278,7 @@ export const postAppConsent = async (c: Context<typeConfig.Context>) => {
     c,
     authCodeBody.user.id,
     authCodeBody.appId,
+    authCodeBody.request.scopes,
   )
 
   return c.json(await identityService.processPostAuthorize(

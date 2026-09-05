@@ -129,14 +129,30 @@ export const getAccessTokenBody = async (
     }
   }
 
+  const { AUTH_SERVER_URL: serverUrl } = env(context)
+
   let accessTokenBody: typeConfig.AccessTokenBody
   try {
     accessTokenBody = await verify(
       accessToken,
       key,
-      'RS256',
+      {
+        alg: 'RS256',
+        iss: serverUrl,
+      },
     ) as unknown as typeConfig.AccessTokenBody
   } catch (e) {
+    loggerUtil.triggerLogger(
+      context,
+      loggerUtil.LoggerLevel.Warn,
+      messageConfig.RequestError.WrongAccessToken,
+    )
+    throw new errorConfig.UnAuthorized(messageConfig.RequestError.WrongAccessToken)
+  }
+
+  if (
+    typeof accessTokenBody.scope !== 'string'
+  ) {
     loggerUtil.triggerLogger(
       context,
       loggerUtil.LoggerLevel.Warn,
@@ -282,12 +298,18 @@ export const verifyFacebookCredential = async (
   if (tokenRes.ok) {
     const tokenBody = await tokenRes.json() as object
     if ('access_token' in tokenBody) {
-      const verifyRes = await fetch(`${graphBase}/debug_token?input_token=${credential}&access_token=${tokenBody.access_token}`)
+      const appAccessToken = String(tokenBody.access_token)
+      const verifyRes = await fetch(`${graphBase}/debug_token?input_token=${credential}&access_token=${appAccessToken}`)
       if (verifyRes.ok) {
         const verifyBody = await verifyRes.json() as object
         const data = 'data' in verifyBody ? verifyBody.data as object : null
-        if (data && 'is_valid' in data && data.is_valid && 'user_id' in data) {
-          const userRes = await fetch(`${graphBase}/v20.0/${data.user_id}?access_token=${tokenBody.access_token}`)
+        if (
+          data &&
+          'is_valid' in data && data.is_valid &&
+          'app_id' in data && data.app_id === clientId &&
+          'user_id' in data
+        ) {
+          const userRes = await fetch(`${graphBase}/v20.0/${data.user_id}?access_token=${appAccessToken}`)
           if (userRes.ok) {
             const userBody = await userRes.json() as { name: string; id: string }
             const user = {

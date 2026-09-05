@@ -15,6 +15,8 @@ import {
   adminS2sApp, adminSpaApp, attachIndividualScopes, dbTime,
   getS2sToken,
 } from 'tests/util'
+import { jwtService } from 'services'
+import { timeUtil } from 'utils'
 
 let db: Database
 
@@ -27,6 +29,24 @@ afterEach(async () => {
 })
 
 const BaseRoute = routeConfig.InternalRoute.ApiApps
+
+const getSpaTokenWithScope = async (scope: string) => {
+  const appRecord = await db.prepare('SELECT * FROM app where id = 1').get() as appModel.Record
+  const currentTimestamp = timeUtil.getCurrentTimestamp()
+
+  return jwtService.signWithKid(
+    { env: mock(db) } as never,
+    {
+      sub: '1-1-1-1',
+      azp: appRecord.clientId,
+      iss: 'http://localhost:8787',
+      scope,
+      iat: currentTimestamp,
+      exp: currentTimestamp + 1800,
+      roles: [],
+    },
+  )
+}
 
 const createNewApp = async (token?: string) => await app.request(
   BaseRoute,
@@ -63,6 +83,39 @@ const newApp = {
   requireSmsMfa: false,
   allowEmailMfaAsBackup: false,
 }
+
+describe(
+  's2s token guard',
+  () => {
+    test(
+      'should reject SPA token with privileged scope for unscoped s2s guard',
+      async () => {
+        const token = await getSpaTokenWithScope(Scope.Root)
+        const res = await app.request(
+          '/info',
+          { headers: { Authorization: `Bearer ${token}` } },
+          mock(db),
+        )
+
+        expect(res.status).toBe(401)
+      },
+    )
+
+    test(
+      'should reject SPA token with privileged scope for scoped s2s guard',
+      async () => {
+        const token = await getSpaTokenWithScope(Scope.Root)
+        const res = await app.request(
+          BaseRoute,
+          { headers: { Authorization: `Bearer ${token}` } },
+          mock(db),
+        )
+
+        expect(res.status).toBe(401)
+      },
+    )
+  },
+)
 
 describe(
   'get all',
@@ -314,6 +367,96 @@ describe(
 
         const res1 = await createNewApp('')
         expect(res1.status).toBe(401)
+      },
+    )
+  },
+)
+
+describe(
+  'root scope assignment guard',
+  () => {
+    const createRootAppReq = async (token: string) => await app.request(
+      BaseRoute,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'root app',
+          type: 's2s',
+          scopes: ['root'],
+          redirectUris: [],
+        }),
+        headers: { Authorization: `Bearer ${token}` },
+      },
+      mock(db),
+    )
+
+    test(
+      'should reject create with root scope from a write_app caller',
+      async () => {
+        await attachIndividualScopes(db)
+        const token = await getS2sToken(
+          db,
+          Scope.WriteApp,
+        )
+        const res = await createRootAppReq(token)
+
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.NoRootScopeToAssignRoot)
+      },
+    )
+
+    test(
+      'should allow create with root scope from a root caller',
+      async () => {
+        const res = await createRootAppReq(await getS2sToken(db))
+        const json = await res.json() as { app: { scopes: string[] } }
+
+        expect(res.status).toBe(201)
+        expect(json.app.scopes).toStrictEqual(['root'])
+      },
+    )
+
+    test(
+      'should reject update adding root scope from a write_app caller',
+      async () => {
+        await createNewApp()
+        await attachIndividualScopes(db)
+        const token = await getS2sToken(
+          db,
+          Scope.WriteApp,
+        )
+        const res = await app.request(
+          `${BaseRoute}/3`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ scopes: ['openid', 'root'] }),
+            headers: { Authorization: `Bearer ${token}` },
+          },
+          mock(db),
+        )
+
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.NoRootScopeToAssignRoot)
+      },
+    )
+
+    test(
+      'should allow update adding root scope from a root caller',
+      async () => {
+        await createNewApp()
+        const res = await app.request(
+          `${BaseRoute}/3`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ scopes: ['root'] }),
+            headers: { Authorization: `Bearer ${await getS2sToken(db)}` },
+          },
+          mock(db),
+        )
+        const json = await res.json() as { app: { scopes: string[] } }
+
+        expect(res.status).toBe(200)
+        expect(json.app.scopes).toStrictEqual(['root'])
       },
     )
   },

@@ -7,9 +7,12 @@ import {
   messageConfig,
   typeConfig,
 } from 'configs'
-import { identityDto } from 'dtos'
+import {
+  identityDto, oauthDto,
+} from 'dtos'
 import {
   emailService,
+  identityService,
   kvService, passkeyService, recoveryCodeService, userService,
 } from 'services'
 import {
@@ -40,9 +43,10 @@ export const postChangePassword = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.PostChangePasswordDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ChangePassword,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -55,6 +59,12 @@ export const postChangePassword = async (c: Context<typeConfig.Context>) => {
   checkAccount(
     c,
     authInfo.user,
+  )
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
   )
 
   await userService.changeUserPassword(
@@ -72,9 +82,10 @@ export const postChangeEmailCode = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.PostChangeEmailCodeDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ChangeEmail,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -87,6 +98,12 @@ export const postChangeEmailCode = async (c: Context<typeConfig.Context>) => {
   const userEmail = checkAccount(
     c,
     authInfo.user,
+  )
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
   )
 
   const { CHANGE_EMAIL_EMAIL_THRESHOLD: emailThreshold } = env(c)
@@ -137,9 +154,10 @@ export const postChangeEmail = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.PostChangeEmailDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ChangeEmail,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -152,6 +170,12 @@ export const postChangeEmail = async (c: Context<typeConfig.Context>) => {
   checkAccount(
     c,
     authInfo.user,
+  )
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
   )
 
   const { CHANGE_EMAIL_CODE_THRESHOLD: changeEmailCodeThreshold } = env(c)
@@ -216,9 +240,10 @@ export const postResetMfa = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.PostProcessDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authCodeBody = await kvService.getAuthCodeBody(
+  const authCodeBody = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ResetMfa,
   )
   if (!authCodeBody) {
     loggerUtil.triggerLogger(
@@ -228,6 +253,12 @@ export const postResetMfa = async (c: Context<typeConfig.Context>) => {
     )
     throw new errorConfig.Forbidden(messageConfig.RequestError.WrongAuthCode)
   }
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authCodeBody,
+  )
 
   await userService.resetUserMfa(
     c,
@@ -245,9 +276,10 @@ export const getManagePasskey = async (c: Context<typeConfig.Context>)
 : Promise<TypedResponse<GetManagePasskeyRes>> => {
   const queryDto = await identityDto.parseGetProcess(c)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     queryDto.code,
+    oauthDto.Policy.ManagePasskey,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -284,9 +316,10 @@ export const postManagePasskey = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.PostManagePasskeyDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ManagePasskey,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -299,6 +332,12 @@ export const postManagePasskey = async (c: Context<typeConfig.Context>) => {
   checkAccount(
     c,
     authInfo.user,
+  )
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
   )
 
   const {
@@ -336,9 +375,10 @@ export const postManageRecoveryCode = async (c: Context<typeConfig.Context>)
   const bodyDto = new identityDto.PostProcessDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ManageRecoveryCode,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -351,6 +391,12 @@ export const postManageRecoveryCode = async (c: Context<typeConfig.Context>)
   checkAccount(
     c,
     authInfo.user,
+  )
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
   )
 
   const { recoveryCode } = await recoveryCodeService.regenerateRecoveryCode(
@@ -369,9 +415,10 @@ export const deleteManagePasskey = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.DeleteManagePasskeyDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.ManagePasskey,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -400,6 +447,12 @@ export const deleteManagePasskey = async (c: Context<typeConfig.Context>) => {
     throw new errorConfig.Forbidden(messageConfig.RequestError.PasskeyNotFound)
   }
 
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
+  )
+
   await passkeyService.deletePasskey(
     c,
     authInfo.user.id,
@@ -415,9 +468,10 @@ export const postUpdateInfo = async (c: Context<typeConfig.Context>) => {
   const bodyDto = new identityDto.PostUpdateInfoDto(reqBody)
   await validateUtil.dto(bodyDto)
 
-  const authInfo = await kvService.getAuthCodeBody(
+  const authInfo = await kvService.getAuthCodeBodyForPolicy(
     c.env.KV,
     bodyDto.code,
+    oauthDto.Policy.UpdateInfo,
   )
   if (!authInfo) {
     loggerUtil.triggerLogger(
@@ -430,6 +484,12 @@ export const postUpdateInfo = async (c: Context<typeConfig.Context>) => {
   checkAccount(
     c,
     authInfo.user,
+  )
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authInfo,
   )
 
   await userService.updateUser(

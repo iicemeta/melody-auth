@@ -5,9 +5,7 @@ import { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/server'
 import {
   errorConfig, messageConfig, typeConfig,
 } from 'configs'
-import {
-  identityDto, oauthDto,
-} from 'dtos'
+import { identityDto } from 'dtos'
 import {
   appService,
   identityService,
@@ -71,6 +69,12 @@ export const postProcessPasskeyEnroll = async (c: Context<typeConfig.Context>) =
     throw new errorConfig.Forbidden(messageConfig.RequestError.WrongAuthCode)
   }
 
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authCodeStore,
+  )
+
   const {
     passkeyId, passkeyPublickey, passkeyCounter,
   } = await passkeyService.processPasskeyEnroll(
@@ -113,6 +117,12 @@ export const postProcessPasskeyEnrollDecline = async (c: Context<typeConfig.Cont
     )
     throw new errorConfig.Forbidden(messageConfig.RequestError.WrongAuthCode)
   }
+
+  await identityService.ensureAuthCodeIsSecured(
+    c,
+    bodyDto.code,
+    authCodeStore,
+  )
 
   if (bodyDto.remember) {
     await userService.skipUserPasskeyEnroll(
@@ -173,7 +183,11 @@ export const postAuthorizePasskeyVerify = async (c: Context<typeConfig.Context>)
     newCounter,
   )
 
-  const request = new oauthDto.GetAuthorizeDto(bodyDto)
+  const request = await identityService.getAppAuthorizedRequest(
+    c,
+    app.id,
+    bodyDto,
+  )
 
   const authCodeBody = {
     appId: app.id,

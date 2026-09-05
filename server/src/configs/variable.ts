@@ -1,4 +1,6 @@
-import { Role } from '@melody-auth/shared'
+import {
+  Role, Scope,
+} from '@melody-auth/shared'
 
 export enum DefaultBranding {
   FontFamily = 'Inter',
@@ -49,6 +51,9 @@ export const SocialSignInConfig = Object.freeze({
   DiscordScope: 'identity+email',
   FacebookScope: 'public_profile',
   AppleScope: 'name email',
+  // Keep true only when external providers supply MFA assurance equivalent to local MFA.
+  // Set to false to require configured local MFA after social, OIDC, and SAML sign-in.
+  ExternalSignInCanBypassLocalMfa: true,
 })
 
 export const SmsMfaConfig = Object.freeze({
@@ -59,7 +64,11 @@ export const SmsMfaConfig = Object.freeze({
   validationRegex: /^\+[1-9]\d{1,14}$/,
 })
 
-export const S2sConfig = Object.freeze({ impersonationRoles: [Role.SuperAdmin] })
+export const RequestIPConfig = Object.freeze({
+  // Node deployments only. Add headers only when a trusted proxy removes them
+  // from incoming requests and then sets them itself; otherwise leave this empty.
+  trustedHeaders: [] as string[],
+})
 
 export const systemConfig = Object.freeze({
   name: 'Melody Auth',
@@ -73,4 +82,28 @@ export const systemConfig = Object.freeze({
   sendEmailToRealReceiverOnDev: false,
   sendSmsToRealReceiverOnDev: false,
   enablePlainPkceMethod: false,
+})
+
+export const S2sConfig = Object.freeze({
+  impersonationRoles: [Role.SuperAdmin],
+  // Built-in roles are immutable and can only be assigned by a caller that holds the root scope.
+  builtInRoles: [Role.SuperAdmin],
+  // They can only be assigned to an app by a caller that holds the root scope.
+  privilegedScopes: [Scope.Root],
+  builtInScopes: Object.freeze<string[]>([
+    Scope.OpenId,
+    Scope.Profile,
+    Scope.OfflineAccess,
+    Scope.Root,
+    Scope.ReadUser,
+    Scope.WriteUser,
+    Scope.ReadApp,
+    Scope.WriteApp,
+    Scope.ReadRole,
+    Scope.WriteRole,
+    Scope.ReadScope,
+    Scope.WriteScope,
+    Scope.ReadOrg,
+    Scope.WriteOrg,
+  ]),
 })

@@ -1,6 +1,8 @@
 import { Context } from 'hono'
 import { env } from 'hono/adapter'
-import { GetUserInfoRes } from '@melody-auth/shared'
+import {
+  GetUserInfoRes, Scope,
+} from '@melody-auth/shared'
 import {
   errorConfig,
   messageConfig,
@@ -510,7 +512,7 @@ export const verifyPasswordSignIn = async (
 export const verifyRecoveryCodeSignIn = async (
   c: Context<typeConfig.Context>,
   bodyDto: baseDto.SignInWithRecoveryCodeDto,
-): Promise<userModel.Record> => {
+): Promise<{ user: userModel.Record; recoveryCode: string }> => {
   const user = await verifySignIn(
     c,
     bodyDto.email,
@@ -522,7 +524,18 @@ export const verifyRecoveryCodeSignIn = async (
     },
   )
 
-  return user
+  const {
+    recoveryCode, recoveryHash,
+  } = await cryptoUtil.genRecoveryCode()
+  const updatedUser = await userModel.update(
+    c.env.DB,
+    user.id,
+    { recoveryCodeHash: recoveryHash },
+  )
+
+  return {
+    user: updatedUser, recoveryCode,
+  }
 }
 
 interface CreateAccountBody {
@@ -949,12 +962,43 @@ export const verifyUserEmail = async (
     throw new errorConfig.Forbidden(messageConfig.RequestError.UserDisabled)
   }
 
+  const { EMAIL_VERIFICATION_CODE_THRESHOLD: emailVerificationCodeThreshold } = env(c)
+  let ip: string | undefined
+  let failedAttempts = 0
+  if (emailVerificationCodeThreshold) {
+    ip = requestUtil.getRequestIP(c)
+    failedAttempts = await kvService.getFailedEmailVerificationCodeAttemptsByIP(
+      c.env.KV,
+      user.id,
+      ip,
+    )
+
+    if (failedAttempts >= emailVerificationCodeThreshold) {
+      loggerUtil.triggerLogger(
+        c,
+        loggerUtil.LoggerLevel.Warn,
+        messageConfig.RequestError.EmailVerificationLocked,
+      )
+      throw new errorConfig.Forbidden(messageConfig.RequestError.EmailVerificationLocked)
+    }
+  }
+
   const isValid = await kvService.verifyEmailVerificationCode(
     c.env.KV,
     user.id,
     bodyDto.code,
   )
   if (!isValid) {
+    if (emailVerificationCodeThreshold) {
+      const attempts = failedAttempts + 1
+      await kvService.setFailedEmailVerificationCodeAttempts(
+        c.env.KV,
+        user.id,
+        ip,
+        attempts,
+      )
+    }
+
     loggerUtil.triggerLogger(
       c,
       loggerUtil.LoggerLevel.Warn,
@@ -1366,6 +1410,26 @@ export const markOtpAsVerified = async (
   )
 }
 
+export const verifyCanAssignRoles = (
+  c: Context<typeConfig.Context>,
+  roleNames: string[],
+) => {
+  const includesPrivilegedRole = variableConfig.S2sConfig.builtInRoles
+    .some((role) => roleNames.includes(role))
+  if (!includesPrivilegedRole) return
+
+  const accessTokenBody = c.get('access_token_body')
+  const callerScopes = accessTokenBody?.scope ? accessTokenBody.scope.split(' ') : []
+  if (!callerScopes.includes(Scope.Root)) {
+    loggerUtil.triggerLogger(
+      c,
+      loggerUtil.LoggerLevel.Warn,
+      messageConfig.RequestError.NoRootScopeToAssignPrivilegedRole,
+    )
+    throw new errorConfig.Forbidden(messageConfig.RequestError.NoRootScopeToAssignPrivilegedRole)
+  }
+}
+
 export const updateUser = async (
   c: Context<typeConfig.Context>,
   authId: string,
@@ -1384,6 +1448,13 @@ export const updateUser = async (
       messageConfig.RequestError.NoUser,
     )
     throw new errorConfig.NotFound(messageConfig.RequestError.NoUser)
+  }
+
+  if (dto.roles) {
+    verifyCanAssignRoles(
+      c,
+      dto.roles,
+    )
   }
 
   if (dto.isActive && user.invitationToken) {
