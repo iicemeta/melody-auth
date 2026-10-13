@@ -76,6 +76,10 @@ export const systemConfig = Object.freeze({
   emailVerificationCodeExpiresIn: 7200, // must be x * 3600 (in seconds)
   passwordResetCodeExpiresIn: 7200, // must be x * 3600 (in seconds)
   changeEmailVerificationCodeExpiresIn: 7200, // must be x * 3600 (in seconds)
+  // Email verification, password reset, change email, email/SMS MFA and passwordless codes are invalidated after
+  // this multiple of the corresponding per user/IP threshold failed attempts from any IP.
+  // OTP MFA is locked for the user after the same number of failed attempts from any IP.
+  codeFailedAttemptsMultiplier: 5,
   emailMfaCodeExpiresIn: 300, // must be x * 60 (in seconds)
   smsMfaCodeExpiresIn: 300, // must be x * 60 (in seconds)
   invitationExpiresIn: 7, // in days
@@ -90,6 +94,9 @@ export const S2sConfig = Object.freeze({
   builtInRoles: [Role.SuperAdmin],
   // They can only be assigned to an app by a caller that holds the root scope.
   privilegedScopes: [Scope.Root],
+  // Default apps seeded for the admin panel. They can only be updated or deleted by a caller that holds the root scope.
+  adminPanelSpaAppId: 1,
+  adminPanelS2sAppId: 2,
   builtInScopes: Object.freeze<string[]>([
     Scope.OpenId,
     Scope.Profile,

@@ -257,6 +257,21 @@ export const invalidRefreshTokenBySessionId = async (
   return false
 }
 
+export const invalidRefreshTokensByUser = async (
+  kv: KVNamespace,
+  userId: number,
+) => {
+  const prefix = `${adapterConfig.BaseKVKey.RefreshToken}-${userId}.`
+  let cursor: string | undefined
+  do {
+    const result = await kv.list({
+      prefix, cursor,
+    })
+    await Promise.all(result.keys.map((key) => kv.delete(key.name)))
+    cursor = result.list_complete ? undefined : result.cursor
+  } while (cursor)
+}
+
 export const emailMfaCodeVerified = async (
   kv: KVNamespace,
   authCode: string,
@@ -360,6 +375,10 @@ export const storeSmsMfaCode = async (
     mfaCode,
     { expirationTtl: variableConfig.systemConfig.smsMfaCodeExpiresIn },
   )
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedSmsMfaCodeAttempts,
+    authCode,
+  ))
 }
 
 export const storeEmailMfaCode = async (
@@ -375,6 +394,10 @@ export const storeEmailMfaCode = async (
     mfaCode,
     { expirationTtl: variableConfig.systemConfig.emailMfaCodeExpiresIn },
   )
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedEmailMfaCodeAttempts,
+    authCode,
+  ))
 }
 
 export const smsMfaCodeVerified = async (
@@ -453,6 +476,10 @@ export const storePasswordlessCode = async (
     mfaCode,
     { expirationTtl: expiresIn },
   )
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedPasswordlessCodeAttempts,
+    authCode,
+  ))
 }
 
 export const stampPasswordlessCode = async (
@@ -491,6 +518,35 @@ export const passwordlessCodeVerified = async (
   return storedCode && storedCode === '1'
 }
 
+export const storePasswordlessBrowserBinding = async (
+  kv: KVNamespace,
+  authCode: string,
+  bindingValue: string,
+  expiresIn: number,
+) => {
+  await kv.put(
+    adapterConfig.getKVKey(
+      adapterConfig.BaseKVKey.PasswordlessBrowserBinding,
+      authCode,
+    ),
+    bindingValue,
+    { expirationTtl: expiresIn },
+  )
+}
+
+export const verifyPasswordlessBrowserBinding = async (
+  kv: KVNamespace,
+  authCode: string,
+  bindingValue: string | undefined,
+) => {
+  if (!bindingValue) return false
+  const storedValue = await kv.get(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.PasswordlessBrowserBinding,
+    authCode,
+  ))
+  return !!storedValue && storedValue === bindingValue
+}
+
 export const storeEmailVerificationCode = async (
   kv: KVNamespace,
   userId: number,
@@ -504,6 +560,10 @@ export const storeEmailVerificationCode = async (
     code,
     { expirationTtl: variableConfig.systemConfig.emailVerificationCodeExpiresIn },
   )
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedEmailVerificationCodeAttempts,
+    String(userId),
+  ))
 }
 
 export const verifyEmailVerificationCode = async (
@@ -534,6 +594,10 @@ export const storePasswordResetCode = async (
     code,
     { expirationTtl: variableConfig.systemConfig.passwordResetCodeExpiresIn },
   )
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedPasswordResetCodeAttempts,
+    String(userId),
+  ))
 }
 
 export const verifyPasswordResetCode = async (
@@ -625,6 +689,120 @@ export const setFailedMfaCodeAttempts = async (
   )
 }
 
+export const getTotalFailedEmailMfaCodeAttempts = async (
+  kv: KVNamespace,
+  authCode: string,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedEmailMfaCodeAttempts,
+    authCode,
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedEmailMfaCodeAttempts = async (
+  kv: KVNamespace,
+  authCode: string,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedEmailMfaCodeAttempts,
+    authCode,
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: variableConfig.systemConfig.emailMfaCodeExpiresIn },
+  )
+}
+
+export const getTotalFailedSmsMfaCodeAttempts = async (
+  kv: KVNamespace,
+  authCode: string,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedSmsMfaCodeAttempts,
+    authCode,
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedSmsMfaCodeAttempts = async (
+  kv: KVNamespace,
+  authCode: string,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedSmsMfaCodeAttempts,
+    authCode,
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: variableConfig.systemConfig.smsMfaCodeExpiresIn },
+  )
+}
+
+export const getTotalFailedPasswordlessCodeAttempts = async (
+  kv: KVNamespace,
+  authCode: string,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedPasswordlessCodeAttempts,
+    authCode,
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedPasswordlessCodeAttempts = async (
+  kv: KVNamespace,
+  authCode: string,
+  count: number,
+  expiresIn: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedPasswordlessCodeAttempts,
+    authCode,
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: expiresIn },
+  )
+}
+
+// OTP MFA has no per-sign-in code to invalidate, so failures are counted per user instead.
+export const getTotalFailedOtpMfaCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedOtpMfaCodeAttempts,
+    String(userId),
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedOtpMfaCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedOtpMfaCodeAttempts,
+    String(userId),
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: 1800 },
+  )
+}
+
 export const getFailedAuthCodeVerifierAttemptsByIP = async (
   kv: KVNamespace,
   userId: number,
@@ -686,6 +864,34 @@ export const setFailedPasswordResetCodeAttempts = async (
     key,
     String(count),
     { expirationTtl: 1800 },
+  )
+}
+
+export const getTotalFailedPasswordResetCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedPasswordResetCodeAttempts,
+    String(userId),
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedPasswordResetCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedPasswordResetCodeAttempts,
+    String(userId),
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: variableConfig.systemConfig.passwordResetCodeExpiresIn },
   )
 }
 
@@ -956,6 +1162,11 @@ export const storeChangeEmailCode = async (
     code,
     { expirationTtl: variableConfig.systemConfig.changeEmailVerificationCodeExpiresIn },
   )
+  await kv.delete(adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedChangeEmailCodeAttempts,
+    String(userId),
+    email,
+  ))
 }
 
 export const verifyChangeEmailCode = async (
@@ -1035,6 +1246,38 @@ export const setFailedChangeEmailCodeAttempts = async (
   )
 }
 
+export const getTotalFailedChangeEmailCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+  email: string,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedChangeEmailCodeAttempts,
+    String(userId),
+    email,
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedChangeEmailCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+  email: string,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedChangeEmailCodeAttempts,
+    String(userId),
+    email,
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: variableConfig.systemConfig.changeEmailVerificationCodeExpiresIn },
+  )
+}
+
 export const getFailedEmailVerificationCodeAttemptsByIP = async (
   kv: KVNamespace,
   userId: number,
@@ -1064,6 +1307,34 @@ export const setFailedEmailVerificationCodeAttempts = async (
     key,
     String(count),
     { expirationTtl: 1800 },
+  )
+}
+
+export const getTotalFailedEmailVerificationCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedEmailVerificationCodeAttempts,
+    String(userId),
+  )
+  const stored = await kv.get(key)
+  return stored ? Number(stored) : 0
+}
+
+export const setTotalFailedEmailVerificationCodeAttempts = async (
+  kv: KVNamespace,
+  userId: number,
+  count: number,
+) => {
+  const key = adapterConfig.getKVKey(
+    adapterConfig.BaseKVKey.TotalFailedEmailVerificationCodeAttempts,
+    String(userId),
+  )
+  await kv.put(
+    key,
+    String(count),
+    { expirationTtl: variableConfig.systemConfig.emailVerificationCodeExpiresIn },
   )
 }
 

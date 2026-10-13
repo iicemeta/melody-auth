@@ -6,7 +6,7 @@ import {
   routeConfig,
 } from 'configs'
 import {
-  identityService, kvService, userService,
+  identityService, kvService, mfaService, userService,
 } from 'services'
 import * as samlService from 'saml/service'
 import {
@@ -23,6 +23,14 @@ const firstStringValue = (value?: string | string[]): string => {
 const toStringArray = (value?: string | string[]): string[] => {
   if (Array.isArray(value)) return value.map((item) => String(item))
   return value === undefined || value === null ? [] : [String(value)]
+}
+
+const singleStringValue = (value?: string | string[]): string | null => {
+  const values = Array.isArray(value) ? value : [value]
+  if (values.length !== 1) return null
+  const [item] = values
+  if (typeof item !== 'string' || !item.trim()) return null
+  return item
 }
 
 const getSamlReplayTtl = (
@@ -72,25 +80,27 @@ export const getSamlSpLogin = async (c: Context) => {
   )
 
   const { AUTHORIZATION_CODE_EXPIRES_IN: codeExpiresIn } = env(c)
+  const mfaConfig = mfaService.getAppMfaConfig(app)
 
-  const authCode = genRandomString(128)
-  const authCodeBody = {
+  const sessionId = genRandomString(128)
+  const sessionBody = {
     appId: app.id,
     appName: app.name,
     request: queryDto,
     samlRequestId: requestId,
+    mfa: mfaConfig ? mfaService.getAuthCodeBodyMfaConfig(mfaConfig) : undefined,
   }
   await kvService.storeEmbeddedSession(
     c.env.KV,
-    authCode,
-    authCodeBody,
+    sessionId,
+    sessionBody,
     codeExpiresIn,
   )
 
   const url = new URL(context)
   url.searchParams.set(
     'RelayState',
-    authCode,
+    sessionId,
   )
 
   return c.redirect(
@@ -193,13 +203,22 @@ export const postSamlSpAcs = async (c: Context) => {
       ),
     )
 
-    const userId = extract.attributes?.[record.userIdAttribute]
+    const userId = singleStringValue(extract.attributes?.[record.userIdAttribute])
+    if (!userId) {
+      loggerUtil.triggerLogger(
+        c,
+        loggerUtil.LoggerLevel.Warn,
+        messageConfig.RequestError.InvalidSamlUserId,
+      )
+      throw new errorConfig.Forbidden(messageConfig.RequestError.InvalidSamlUserId)
+    }
+
     const email = record.emailAttribute ? extract.attributes?.[record.emailAttribute] : null
     const firstName = record.firstNameAttribute ? extract.attributes?.[record.firstNameAttribute] : null
     const lastName = record.lastNameAttribute ? extract.attributes?.[record.lastNameAttribute] : null
 
     const samlUser: userService.SamlUser = {
-      userId: String(userId),
+      userId,
       email: email ? String(email) : null,
       firstName: firstName ? String(firstName) : null,
       lastName: lastName ? String(lastName) : null,
@@ -212,13 +231,19 @@ export const postSamlSpAcs = async (c: Context) => {
       'en',
     )
 
+    await kvService.deleteEmbeddedSession(
+      c.env.KV,
+      sessionId,
+    )
+
+    const authCode = genRandomString(128)
     const authCodeBody = embeddedHandler.sessionBodyToAuthCodeBody({
       ...session,
       user,
     })
     await kvService.storeAuthCode(
       c.env.KV,
-      sessionId,
+      authCode,
       authCodeBody,
       codeExpiresIn,
     )
@@ -226,7 +251,7 @@ export const postSamlSpAcs = async (c: Context) => {
     const detail = await identityService.processPostAuthorize(
       c,
       identityService.AuthorizeStep.Social,
-      sessionId,
+      authCode,
       authCodeBody,
     )
 

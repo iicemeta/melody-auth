@@ -1,6 +1,6 @@
 import { Context } from 'hono'
 import {
-  ClientType, Scope,
+  ClientType, Scope, genRandomString,
 } from '@melody-auth/shared'
 import { env } from 'hono/adapter'
 import {
@@ -22,6 +22,7 @@ export const verifySPAClientRequest = async (
   c: Context<typeConfig.Context>,
   clientId: string,
   redirectUri: string,
+  options: { allowEmbeddedAuthOrigins?: boolean } = {},
 ): Promise<appModel.Record> => {
   const app = await appModel.getByClientId(
     c.env.DB,
@@ -54,12 +55,14 @@ export const verifySPAClientRequest = async (
     throw new errorConfig.UnAuthorized(messageConfig.RequestError.NotSpaTypeApp)
   }
 
-  const { EMBEDDED_AUTH_ORIGINS: allowedOrigins } = env(c)
+  const normalizedRedirectUri = requestUtil.stripEndingSlash(redirectUri)
+  const isAppRedirectUri = app.redirectUris.includes(normalizedRedirectUri)
 
-  if (
-    !app.redirectUris.includes(requestUtil.stripEndingSlash(redirectUri)) &&
-    !allowedOrigins.includes(requestUtil.stripEndingSlash(redirectUri))
-  ) {
+  const { EMBEDDED_AUTH_ORIGINS: embeddedAuthOrigins } = env(c)
+  const isEmbeddedAuthOrigin = !!options.allowEmbeddedAuthOrigins &&
+    embeddedAuthOrigins.includes(normalizedRedirectUri)
+
+  if (!isAppRedirectUri && !isEmbeddedAuthOrigin) {
     loggerUtil.triggerLogger(
       c,
       loggerUtil.LoggerLevel.Warn,
@@ -142,6 +145,15 @@ export const getAppById = async (
   }
 }
 
+const getCallerScopes = (c: Context<typeConfig.Context>): string[] => {
+  const accessTokenBody = c.get('access_token_body')
+  return accessTokenBody?.scope ? accessTokenBody.scope.split(' ') : []
+}
+
+const callerHasRootScope = (c: Context<typeConfig.Context>): boolean => {
+  return getCallerScopes(c).includes(Scope.Root)
+}
+
 const verifyCanAssignRootScope = (
   c: Context<typeConfig.Context>,
   scopes: string[],
@@ -149,15 +161,53 @@ const verifyCanAssignRootScope = (
   const includesPrivilegedScope = variableConfig.S2sConfig.privilegedScopes.some((scope) => scopes.includes(scope))
   if (!includesPrivilegedScope) return
 
-  const accessTokenBody = c.get('access_token_body')
-  const callerScopes = accessTokenBody?.scope ? accessTokenBody.scope.split(' ') : []
-  if (!callerScopes.includes(Scope.Root)) {
+  if (!callerHasRootScope(c)) {
     loggerUtil.triggerLogger(
       c,
       loggerUtil.LoggerLevel.Warn,
       messageConfig.RequestError.NoRootScopeToAssignRoot,
     )
     throw new errorConfig.Forbidden(messageConfig.RequestError.NoRootScopeToAssignRoot)
+  }
+}
+
+const verifyCanAssignS2sScopes = (
+  c: Context<typeConfig.Context>,
+  appType: ClientType,
+  scopes: string[],
+) => {
+  if (appType !== ClientType.S2S || !scopes.length) return
+
+  const callerScopes = getCallerScopes(c)
+  if (callerScopes.includes(Scope.Root)) return
+
+  const includesUnheldScope = scopes.some((scope) => !callerScopes.includes(scope))
+  if (!includesUnheldScope) return
+
+  loggerUtil.triggerLogger(
+    c,
+    loggerUtil.LoggerLevel.Warn,
+    messageConfig.RequestError.NoScopeToAssignToS2sApp,
+  )
+  throw new errorConfig.Forbidden(messageConfig.RequestError.NoScopeToAssignToS2sApp)
+}
+
+const verifyCanModifyAdminPanelApp = (
+  c: Context<typeConfig.Context>,
+  appId: number,
+) => {
+  const {
+    adminPanelSpaAppId, adminPanelS2sAppId,
+  } = variableConfig.S2sConfig
+  if (appId !== adminPanelSpaAppId && appId !== adminPanelS2sAppId) return
+
+  if (!callerHasRootScope(c)) {
+    loggerUtil.triggerLogger(
+      c,
+      loggerUtil.LoggerLevel.Warn,
+      messageConfig.RequestError.NoRootScopeToModifyAdminPanelApp,
+    )
+    throw new errorConfig.Forbidden(messageConfig.RequestError.NoRootScopeToModifyAdminPanelApp)
   }
 }
 
@@ -170,12 +220,20 @@ export const createApp = async (
     dto.scopes,
   )
 
+  verifyCanAssignS2sScopes(
+    c,
+    dto.type,
+    dto.scopes,
+  )
+
   const app = await appModel.create(
     c.env.DB,
     {
       name: dto.name,
       type: dto.type,
       redirectUris: dto.redirectUris.join(','),
+      clientId: genRandomString(64),
+      secret: genRandomString(128),
     },
   )
 
@@ -227,6 +285,26 @@ export const updateApp = async (
     )
   }
 
+  verifyCanModifyAdminPanelApp(
+    c,
+    app.id,
+  )
+
+  const appScopes = await appScopeModel.getAllByAppId(
+    c.env.DB,
+    app.id,
+  )
+
+  const scopeNamesToCreate = dto.scopes
+    ? dto.scopes.filter((scope) => appScopes.every((appScope) => appScope.scopeName !== scope))
+    : []
+
+  verifyCanAssignS2sScopes(
+    c,
+    app.type,
+    scopeNamesToCreate,
+  )
+
   const updatedApp = Object.values(updateDto).some((val) => val !== undefined)
     ? await appModel.update(
       c.env.DB,
@@ -235,16 +313,10 @@ export const updateApp = async (
     )
     : app
 
-  const appScopes = await appScopeModel.getAllByAppId(
-    c.env.DB,
-    app.id,
-  )
-
   if (dto.scopes) {
     const scopesToDelete = appScopes.filter((appScope) => !dto.scopes?.includes(appScope.scopeName))
 
     const allScopes = await scopeModel.getAll(c.env.DB)
-    const scopeNamesToCreate = dto.scopes.filter((scope) => appScopes.every((appScope) => appScope.scopeName !== scope))
     const scopesToCreate = scopeNamesToCreate.map((name) => {
       const matched = allScopes.find((scope) => scope.name === name)
       if (!matched) {
@@ -286,6 +358,11 @@ export const deleteApp = async (
   c: Context<typeConfig.Context>,
   appId: number,
 ): Promise<true> => {
+  verifyCanModifyAdminPanelApp(
+    c,
+    appId,
+  )
+
   await appModel.remove(
     c.env.DB,
     appId,

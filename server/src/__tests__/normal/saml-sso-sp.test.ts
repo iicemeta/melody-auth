@@ -76,7 +76,9 @@ const insertSamlIdp = async () => {
   `).run(samlIdpMetaDataMock)
 }
 
-const seedAcsSession = async (samlRequestId?: string) => {
+const seedAcsSession = async (
+  samlRequestId?: string, mfa?: EmbeddedSessionBody['mfa'],
+) => {
   const sessionId = 'saml-acs-session'
   const session = {
     appId: 1,
@@ -87,6 +89,7 @@ const seedAcsSession = async (samlRequestId?: string) => {
       redirectUri: 'http://localhost:3000/en/dashboard',
     },
     ...(samlRequestId === undefined ? {} : { samlRequestId }),
+    ...(mfa === undefined ? {} : { mfa }),
   }
   await mockedKV.put(
     `${adapterConfig.BaseKVKey.EmbeddedSession}-${sessionId}`,
@@ -198,6 +201,50 @@ describe(
         const session = JSON.parse(sessionStr) as EmbeddedSessionBody
         expect(typeof session.samlRequestId).toBe('string')
         expect((session.samlRequestId ?? '').length).toBeGreaterThan(0)
+
+        process.env.ENABLE_SAML_SSO_AS_SP = false as unknown as string
+      },
+    )
+
+    test(
+      'should store app level mfa config on the session',
+      async () => {
+        process.env.ENABLE_SAML_SSO_AS_SP = true as unknown as string
+        db.prepare('update app set "useSystemMfaConfig" = ?, "requireOtpMfa" = ? where id = ?').run(
+          0,
+          1,
+          1,
+        )
+
+        const { res } = await prepareLoginRequest()
+        const url = new URL(res.headers.get('Location') ?? '')
+        const sessionId = url.searchParams.get('RelayState')
+
+        const sessionStr = await mockedKV.get(`${adapterConfig.BaseKVKey.EmbeddedSession}-${sessionId}`) as string
+        const session = JSON.parse(sessionStr) as EmbeddedSessionBody
+        expect(session.mfa).toStrictEqual({
+          e: false,
+          o: true,
+          s: false,
+          b: false,
+        })
+
+        process.env.ENABLE_SAML_SSO_AS_SP = false as unknown as string
+      },
+    )
+
+    test(
+      'should not store mfa config on the session when app uses system mfa config',
+      async () => {
+        process.env.ENABLE_SAML_SSO_AS_SP = true as unknown as string
+
+        const { res } = await prepareLoginRequest()
+        const url = new URL(res.headers.get('Location') ?? '')
+        const sessionId = url.searchParams.get('RelayState')
+
+        const sessionStr = await mockedKV.get(`${adapterConfig.BaseKVKey.EmbeddedSession}-${sessionId}`) as string
+        const session = JSON.parse(sessionStr) as EmbeddedSessionBody
+        expect(session.mfa).toBeUndefined()
 
         process.env.ENABLE_SAML_SSO_AS_SP = false as unknown as string
       },
@@ -460,6 +507,73 @@ describe(
       },
     )
 
+    test.each([
+      ['missing', {}],
+      ['empty', { [USER_ID_ATTRIBUTE]: '' }],
+      ['whitespace only', { [USER_ID_ATTRIBUTE]: '   ' }],
+      ['an empty list', { [USER_ID_ATTRIBUTE]: [] }],
+      ['multi-valued', { [USER_ID_ATTRIBUTE]: ['saml-user-1', 'saml-user-2'] }],
+    ])(
+      'should reject a response whose user ID attribute is %s',
+      async (
+        _, attributes,
+      ) => {
+        await insertSamlIdp()
+        const sessionId = await seedAcsSession('_req_match')
+
+        const extract = buildValidExtract('_req_match') as Record<string, unknown>
+        extract.attributes = attributes
+        mockParseLoginResponse(extract)
+        const processSamlAccountSpy = vi.spyOn(
+          userService,
+          'processSamlAccount',
+        )
+        const loggerSpy = vi.spyOn(
+          loggerUtil,
+          'triggerLogger',
+        )
+
+        const res = await postAcs(sessionId)
+        expect(res.status).toBe(400)
+        expect(await res.text()).toBe(messageConfig.RequestError.InvalidSamlResponse)
+        expect(loggerSpy).toHaveBeenCalledWith(
+          expect.anything(),
+          loggerUtil.LoggerLevel.Warn,
+          messageConfig.RequestError.InvalidSamlUserId,
+        )
+        expect(processSamlAccountSpy).not.toHaveBeenCalled()
+      },
+    )
+
+    test(
+      'should accept a user ID attribute provided as a single-item list',
+      async () => {
+        await insertSamlIdp()
+        const sessionId = await seedAcsSession('_req_match')
+
+        const extract = buildValidExtract('_req_match') as Record<string, unknown>
+        extract.attributes = { [USER_ID_ATTRIBUTE]: ['saml-user-1'] }
+        mockParseLoginResponse(extract)
+        const processSamlAccountSpy = vi.spyOn(
+          userService,
+          'processSamlAccount',
+        ).mockResolvedValue({ id: 1 } as unknown as Awaited<ReturnType<typeof userService.processSamlAccount>>)
+        vi.spyOn(
+          identityService,
+          'processPostAuthorize',
+        ).mockResolvedValue({
+          state: '123',
+          code: 'test-code',
+          redirectUri: 'http://localhost:3000/en/dashboard',
+          nextPage: routeConfig.View.SignIn,
+        } as unknown as Awaited<ReturnType<typeof identityService.processPostAuthorize>>)
+
+        const res = await postAcs(sessionId)
+        expect(res.status).toBe(302)
+        expect(processSamlAccountSpy.mock.calls[0][1].userId).toBe('saml-user-1')
+      },
+    )
+
     test(
       'should accept a valid response and record it to block replay',
       async () => {
@@ -528,6 +642,82 @@ describe(
 
         const res = await postAcs(sessionId)
         expect(res.status).toBe(302)
+      },
+    )
+
+    test(
+      'should carry the session mfa config into the auth code',
+      async () => {
+        await insertSamlIdp()
+        const mfa = {
+          e: false,
+          o: true,
+          s: false,
+          b: false,
+        }
+        const sessionId = await seedAcsSession(
+          '_req_match',
+          mfa,
+        )
+
+        mockParseLoginResponse(buildValidExtract('_req_match'))
+        vi.spyOn(
+          userService,
+          'processSamlAccount',
+        ).mockResolvedValue({ id: 1 } as unknown as Awaited<ReturnType<typeof userService.processSamlAccount>>)
+        const processPostAuthorizeSpy = vi.spyOn(
+          identityService,
+          'processPostAuthorize',
+        ).mockResolvedValue({
+          state: '123',
+          code: 'test-code',
+          redirectUri: 'http://localhost:3000/en/dashboard',
+          nextPage: routeConfig.View.SignIn,
+        } as unknown as Awaited<ReturnType<typeof identityService.processPostAuthorize>>)
+
+        const res = await postAcs(sessionId)
+        expect(res.status).toBe(302)
+
+        const authCode = processPostAuthorizeSpy.mock.calls[0][2]
+        const codeStore = JSON.parse(await mockedKV.get(`${adapterConfig.BaseKVKey.AuthCode}-${authCode}`) ?? '')
+        expect(codeStore.mfa).toStrictEqual(mfa)
+      },
+    )
+
+    test(
+      'should issue a fresh auth code instead of reusing the relay state',
+      async () => {
+        await insertSamlIdp()
+        const sessionId = await seedAcsSession('_req_match')
+
+        mockParseLoginResponse(buildValidExtract('_req_match'))
+        vi.spyOn(
+          userService,
+          'processSamlAccount',
+        ).mockResolvedValue({ id: 1 } as unknown as Awaited<ReturnType<typeof userService.processSamlAccount>>)
+        const processPostAuthorizeSpy = vi.spyOn(
+          identityService,
+          'processPostAuthorize',
+        ).mockResolvedValue({
+          state: '123',
+          code: 'test-code',
+          redirectUri: 'http://localhost:3000/en/dashboard',
+          nextPage: routeConfig.View.SignIn,
+        } as unknown as Awaited<ReturnType<typeof identityService.processPostAuthorize>>)
+
+        const res = await postAcs(sessionId)
+        expect(res.status).toBe(302)
+
+        const authCode = processPostAuthorizeSpy.mock.calls[0][2]
+        expect(authCode).not.toBe(sessionId)
+        expect(authCode.length).toBe(128)
+        expect(await mockedKV.get(`${adapterConfig.BaseKVKey.AuthCode}-${authCode}`)).toBeTruthy()
+        expect(await mockedKV.get(`${adapterConfig.BaseKVKey.AuthCode}-${sessionId}`)).toBeFalsy()
+        expect(await mockedKV.get(`${adapterConfig.BaseKVKey.EmbeddedSession}-${sessionId}`)).toBeFalsy()
+
+        const replayRes = await postAcs(sessionId)
+        expect(replayRes.status).toBe(400)
+        expect(await replayRes.text()).toBe(messageConfig.RequestError.WrongSessionId)
       },
     )
   },

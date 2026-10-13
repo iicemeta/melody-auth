@@ -4,6 +4,7 @@ import {
   typeConfig,
   errorConfig,
   messageConfig,
+  variableConfig,
 } from 'configs'
 import { identityDto } from 'dtos'
 import {
@@ -33,6 +34,12 @@ export const postAuthorizePasswordless = async (c: Context<typeConfig.Context>) 
     c,
     bodyDto,
     user,
+  )
+
+  await identityService.bindPasswordlessToBrowser(
+    c,
+    authCode,
+    authCodeBody.user.id,
   )
 
   return c.json(await identityService.processPostAuthorize(
@@ -93,6 +100,12 @@ export const postProcessPasswordlessCode = async (c: Context<typeConfig.Context>
     throw new errorConfig.Forbidden(messageConfig.RequestError.WrongAuthCode)
   }
 
+  await identityService.verifyPasswordlessBrowser(
+    c,
+    bodyDto.code,
+    authCodeStore.user.id,
+  )
+
   const {
     AUTHORIZATION_CODE_EXPIRES_IN: expiresIn,
     MFA_CODE_VERIFY_THRESHOLD: threshold,
@@ -100,6 +113,7 @@ export const postProcessPasswordlessCode = async (c: Context<typeConfig.Context>
 
   let ip: string | undefined
   let failedAttempts = 0
+  let totalFailedAttempts = 0
   if (threshold) {
     ip = requestUtil.getRequestIP(c)
     failedAttempts = await kvService.getFailedMfaCodeAttemptsByIP(
@@ -114,6 +128,19 @@ export const postProcessPasswordlessCode = async (c: Context<typeConfig.Context>
         messageConfig.RequestError.PasswordlessLocked,
       )
       throw new errorConfig.Forbidden(messageConfig.RequestError.PasswordlessLocked)
+    }
+
+    totalFailedAttempts = await kvService.getTotalFailedPasswordlessCodeAttempts(
+      c.env.KV,
+      bodyDto.code,
+    )
+    if (totalFailedAttempts >= threshold * variableConfig.systemConfig.codeFailedAttemptsMultiplier) {
+      loggerUtil.triggerLogger(
+        c,
+        loggerUtil.LoggerLevel.Warn,
+        messageConfig.RequestError.WrongPasswordlessCode,
+      )
+      throw new errorConfig.UnAuthorized(messageConfig.RequestError.WrongCode)
     }
   }
 
@@ -131,6 +158,12 @@ export const postProcessPasswordlessCode = async (c: Context<typeConfig.Context>
         authCodeStore.user.id,
         ip,
         failedAttempts + 1,
+      )
+      await kvService.setTotalFailedPasswordlessCodeAttempts(
+        c.env.KV,
+        bodyDto.code,
+        totalFailedAttempts + 1,
+        expiresIn,
       )
     }
     loggerUtil.triggerLogger(
